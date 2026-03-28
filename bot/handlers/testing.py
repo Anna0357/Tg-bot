@@ -5,18 +5,13 @@ from aiogram.types import CallbackQuery, Message
 
 from bot.handlers.results import send_test_outcome_from_callback
 from bot.keyboards.inline import quiz_options_keyboard
-from bot.keyboards.reply import main_menu_keyboard
 from bot.services.scoring import empty_scores, load_quiz, merge_scores
 from bot.states.orientation import OrientationStates
 
 router = Router(name="testing")
 
 _QUESTIONS = load_quiz()
-_STATES = (
-    OrientationStates.question_1,
-    OrientationStates.question_2,
-    OrientationStates.question_3,
-)
+_OPTION_LETTERS = ("А", "Б", "В", "Г")
 
 
 def _question_text(index: int) -> str:
@@ -27,34 +22,38 @@ def _option_labels(index: int) -> list[str]:
     return [opt["label"] for opt in _QUESTIONS[index]["options"]]
 
 
+def _question_message_block(index: int) -> str:
+    lines = [
+        f"<b>Вопрос {index + 1} из {len(_QUESTIONS)}</b>",
+        _question_text(index),
+        "",
+    ]
+    for letter, label in zip(_OPTION_LETTERS, _option_labels(index)):
+        lines.append(f"{letter}) {label}")
+    return "\n".join(lines)
+
+
 @router.message(F.text == "Пройти тест")
 async def start_quiz(message: Message, state: FSMContext) -> None:
-    if len(_QUESTIONS) != len(_STATES):
-        await message.answer(
-            "Тест временно недоступен: число вопросов в данных не совпадает с шагами FSM."
-        )
+    if not _QUESTIONS:
+        await message.answer("Тест временно недоступен: нет вопросов в данных.")
         return
 
     await state.clear()
     scores = empty_scores()
     await state.update_data(scores=dict(scores), current_q=0)
-    await state.set_state(_STATES[0])
+    await state.set_state(OrientationStates.taking_quiz)
+    n_opts = len(_QUESTIONS[0]["options"])
     await message.answer(
-        "Сейчас будет несколько вопросов. В конце покажу направление по интересам "
-        "и идеи кружков и хобби.\n\n"
-        f"<b>Вопрос 1 из {len(_QUESTIONS)}</b>\n{_question_text(0)}",
-        reply_markup=quiz_options_keyboard(0, _option_labels(0)),
+        "Сейчас — опросник по методике Йовайши (модификация Резапкиной): "
+        "24 вопроса, в каждом выбери <b>один</b> вариант — А, Б или В.\n\n"
+        "В конце покажу сферы профессиональных склонностей (I–VI) и идеи кружков и хобби.\n\n"
+        f"{_question_message_block(0)}",
+        reply_markup=quiz_options_keyboard(0, n_opts),
     )
 
 
-@router.callback_query(
-    F.data.startswith("quiz:"),
-    StateFilter(
-        OrientationStates.question_1,
-        OrientationStates.question_2,
-        OrientationStates.question_3,
-    ),
-)
+@router.callback_query(F.data.startswith("quiz:"), StateFilter(OrientationStates.taking_quiz))
 async def on_quiz_answer(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.data or not callback.message:
         await callback.answer()
@@ -101,26 +100,16 @@ async def on_quiz_answer(callback: CallbackQuery, state: FSMContext) -> None:
 
     next_q = q_idx + 1
     await state.update_data(scores=dict(scores_map), current_q=next_q)
-    await state.set_state(_STATES[next_q])
-    body = (
-        f"<b>Вопрос {next_q + 1} из {len(_QUESTIONS)}</b>\n"
-        f"{_question_text(next_q)}"
-    )
+    n_opts = len(_QUESTIONS[next_q]["options"])
     await callback.message.edit_text(
-        body,
-        reply_markup=quiz_options_keyboard(next_q, _option_labels(next_q)),
+        _question_message_block(next_q),
+        reply_markup=quiz_options_keyboard(next_q, n_opts),
     )
 
 
-@router.message(
-    StateFilter(
-        OrientationStates.question_1,
-        OrientationStates.question_2,
-        OrientationStates.question_3,
-    ),
-)
+@router.message(StateFilter(OrientationStates.taking_quiz))
 async def quiz_expected_buttons(message: Message) -> None:
     await message.answer(
-        "Сейчас нужно выбрать вариант кнопкой под вопросом. "
+        "Сейчас нужно выбрать вариант кнопкой А, Б или В под вопросом. "
         "Или нажми «Пройти тест» в меню, чтобы начать заново."
     )
